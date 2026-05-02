@@ -141,6 +141,40 @@ end case;
 This is faithful to the real SPC7110's behaviour and fixes SPL4
 graphics without breaking TMZ or MDH.
 
+## Step 43: registered enable signals match SDD1 pattern
+
+The original port left `spc7110_enable` and `spc7110_reg_enable`
+as combinational `wire` decodes of `SNES_ADDR`. SDD1, the closest
+architectural reference in this codebase, registers its equivalent
+signals on `posedge CLK2` and uses the registered versions everywhere.
+The SD2SNES SDD1 mapper has been doing this for years and runs on
+every console.
+
+The combinational form left a 3-4 LUT-deep decode chain in the
+`SNES_ADDR`-pin to `SNES_DATA`-pin path. Internal STA cannot see this
+because it is a pad-to-pad combinational path, not a register-to-register
+path. On retail 2-chip NTSC consoles and on PAL hardware (which has
+roughly 17 percent looser bus timing) the marginal delay was absorbed
+without symptoms, but reports from testers on stricter-timing boards
+(1-chip SNES, SNES Jr, Super NT FPGA replica) showed black screens
+and self-test failures.
+
+Fix in `main.v`: replace the `wire` declarations with `reg` versions
+sampled in a single `always @(posedge CLK2)` block. Reset behaviour
+matches the original wire semantics (zero when `SNES_DEADr`, asserted
+when `MAPPER == 3'b101`, with the $48xx range decode on `reg_enable`).
+No use site renaming is needed because the signal names are unchanged,
+so PSRAM address muxes, `SYSCLKF/R` generation, `SPC7110Map.ENABLE`
+and the `SNES_DATA` / `SNES_DATABUS_OE` paths all pick up the registered
+version automatically. All gating moves together by one CLK2 cycle, so
+there is no inter-gate skew.
+
+This change was implemented as a structural improvement to bring the
+SPC7110 wrapper in line with the reference SDD1 pattern. It has not
+been validated against testers with strict-timing consoles, so it
+should be considered a structural cleanup that mirrors a known-good
+reference rather than a confirmed fix for any specific tester report.
+
 ## DEC clock enable cannot be a clock gate
 
 Naively gating `SPC7110_DEC` with a clock-enable signal causes

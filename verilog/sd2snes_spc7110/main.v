@@ -355,11 +355,51 @@ wire [15:0] dsp_feat;
 //   - BSRAM port <-> internal 32KB block RAM (Step 2 shortcut; Step 3 moves to PSRAM)
 // ==========================================================================
 
-wire spc7110_enable     = (MAPPER == 3'b101) & ~SNES_DEADr;
-wire spc7110_reg_enable = spc7110_enable & (SNES_ADDR[22] == 1'b0)
-                                         & (SNES_ADDR[15:8] == 8'h48)
-                                         & (SNES_ADDR[7]    == 1'b0);
+// Step 43: registered enable signals, full SDD1-pattern mirror.
+//
+// Background and history:
+//
+// The original SPC7110 port used pure combinational `wire` decodes of
+// SNES_ADDR for spc7110_enable and spc7110_reg_enable. That left a 3-4
+// LUT-deep decode chain in the SNES_ADDR-pin to SNES_DATA-pin path,
+// which on stricter-timing consoles (1-chip SNES, SNES Jr, Super NT
+// FPGA replica) was marginal. PAL hid the issue with its 17 percent
+// slower bus rate and 2-chip retail NTSC also worked, but stricter
+// 60Hz hardware showed black screens and self-test failures.
+//
+// Mirroring SDD1's pattern in full: replace the wire declarations
+// entirely with reg, sample the decode every CLK2 cycle, and let
+// every existing use site pick up the registered version automatically
+// through the same name. No use site renaming. All gating across the
+// design moves together by one cycle, so there is no inter-gate skew.
+//
+// One-cycle latency cost shows up only at boot and at the rare
+// transitions of MAPPER or SNES_DEADr. During steady-state gameplay
+// MAPPER does not change and SNES_DEADr stays low, so the registered
+// signals are stable in their active state and behave identically
+// to the original combinational versions for all bus accesses. The
+// only difference is that the LUT path from SNES_ADDR pin to the
+// gates is replaced by a flop-output path, which is what removes
+// the marginal-timing hazard on strict consoles.
+reg spc7110_enable;
+reg spc7110_reg_enable;
 wire spc7110_snoop_enable = 1'b0; // SPC7110 doesn't need DMA snooping
+
+always @(posedge CLK2) begin
+    if (SNES_DEADr == 1'b1) begin
+        spc7110_enable     <= 1'b0;
+        spc7110_reg_enable <= 1'b0;
+    end else if (MAPPER == 3'b101) begin
+        spc7110_enable <= 1'b1;
+        if (SNES_ADDR[22] == 1'b0 && SNES_ADDR[15:8] == 8'h48 && SNES_ADDR[7] == 1'b0)
+            spc7110_reg_enable <= 1'b1;
+        else
+            spc7110_reg_enable <= 1'b0;
+    end else begin
+        spc7110_enable     <= 1'b0;
+        spc7110_reg_enable <= 1'b0;
+    end
+end
 
 
 // Core ports
